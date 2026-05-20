@@ -40,7 +40,10 @@ class ELL(nn.Module):
         self.max_N_ratio = max_N_ratio
 
         self.weight_func = lambda w, max_distance=max_clip_dist: torch.clamp(w, max=max_distance) / max_distance
-
+        self.sobel_x, self.sobel_y = get_sobel(
+            in_chan=num_classes,
+            out_chan=1
+        )
         self.dist_map_transform = transforms.Compose([
             lambda img: img.unsqueeze(0),
             lambda nd: nd.type(torch.int64),
@@ -188,6 +191,7 @@ class ELL(nn.Module):
         dist_maps = self.get_dist_maps(gt_boundary).cuda() # <-- it will slow down the training, you can put it to dataloader.
 
         pred_boundary = self.run_sobel(logits)
+
         if pred_boundary.sum() < 1: # avoid nan
             return None # you should check in the outside. if None, skip this loss.
         
@@ -200,48 +204,39 @@ class ELL(nn.Module):
         loss = (loss * weight_ce).mean()  # add distance weight
 
         return loss
+
+    def run_sobel(self, logits):
+        gx = self.sobel_x(logits)
+        gy = self.sobel_y(logits)
+        g = torch.sqrt(gx ** 2 + gy ** 2)
+        return torch.sigmoid(g).squeeze(1)  # NHW
 def get_sobel(in_chan, out_chan):
-    '''
     filter_x = np.array([
         [3, 0, -3],
         [10, 0, -10],
         [3, 0, -3],
-    ]).astype(np.float32)
+    ], dtype=np.float32)
+
     filter_y = np.array([
         [3, 10, 3],
         [0, 0, 0],
         [-3, -10, -3],
-    ]).astype(np.float32)
-    '''
-    filter_x = np.array([
-        [3, 0, -3],
-        [10, 0, -10],
-        [3, 0, -3],
-    ]).astype(np.float32)
-    filter_y = np.array([
-        [3, 10, 3],
-        [0, 0, 0],
-        [-3, -10, -3],
-    ]).astype(np.float32)
-    filter_x = filter_x.reshape((1, 1, 3, 3))
-    filter_x = np.repeat(filter_x, in_chan, axis=1)
-    filter_x = np.repeat(filter_x, out_chan, axis=0)
+    ], dtype=np.float32)
 
-    filter_y = filter_y.reshape((1, 1, 3, 3))
-    filter_y = np.repeat(filter_y, in_chan, axis=1)
-    filter_y = np.repeat(filter_y, out_chan, axis=0)
+    filter_x = torch.from_numpy(filter_x).view(1, 1, 3, 3)
+    filter_y = torch.from_numpy(filter_y).view(1, 1, 3, 3)
 
-    filter_x = torch.from_numpy(filter_x)
-    filter_y = torch.from_numpy(filter_y)
-    filter_x = nn.Parameter(filter_x, requires_grad=False)
-    filter_y = nn.Parameter(filter_y, requires_grad=False)
-    conv_x = nn.Conv2d(in_chan, out_chan, kernel_size=3, stride=1, padding=1, bias=False)
-    conv_x.weight = filter_x
-    conv_y = nn.Conv2d(in_chan, out_chan, kernel_size=3, stride=1, padding=1, bias=False)
-    conv_y.weight = filter_y
-    sobel_x = nn.Sequential(conv_x, nn.BatchNorm2d(out_chan))
-    sobel_y = nn.Sequential(conv_y, nn.BatchNorm2d(out_chan))
-    return sobel_x, sobel_y
+    filter_x = filter_x.repeat(out_chan, in_chan, 1, 1)
+    filter_y = filter_y.repeat(out_chan, in_chan, 1, 1)
+
+    conv_x = nn.Conv2d(in_chan, out_chan, 3, padding=1, bias=False)
+    conv_y = nn.Conv2d(in_chan, out_chan, 3, padding=1, bias=False)
+
+    conv_x.weight = nn.Parameter(filter_x, requires_grad=False)
+    conv_y.weight = nn.Parameter(filter_y, requires_grad=False)
+
+    return conv_x, conv_y
+
 
 def run_sobel(conv_x, conv_y, input):
     g_x = conv_x(input)

@@ -209,74 +209,122 @@ class CrossEntropyLoss(nn.Module):
             **kwargs)
         return loss_cls
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from mmseg.models.builder import LOSSES
+from .utils import weight_reduce_loss
+from .cross_entropy_loss import cross_entropy
+
 @LOSSES.register_module()
 class CrossEntropyLossEll(nn.Module):
-    """CrossEntropyLoss.
 
-    Args:
-        use_sigmoid (bool, optional): Whether the prediction uses sigmoid
-            of softmax. Defaults to False.
-        use_mask (bool, optional): Whether to use mask cross entropy loss.
-            Defaults to False.
-        reduction (str, optional): . Defaults to 'mean'.
-            Options are "none", "mean" and "sum".
-        class_weight (list[float], optional): Weight of each class.
-            Defaults to None.
-        loss_weight (float, optional): Weight of the loss. Defaults to 1.0.
-    """
+    def __init__(
+        self,
+        use_sigmoid=False,      # MUST accept
+        use_mask=False,         # MUST accept
+        reduction='mean',
+        class_weight=None,
+        loss_weight=1.0,
+        ell_weight=3.0,
+        **kwargs                # absorb anything extra
+    ):
+        super().__init__()
 
-    def __init__(self,
-                 use_sigmoid=False,
-                 use_mask=False,
-                 reduction='mean',
-                 class_weight=None,
-                 loss_weight=1.0):
-        super(CrossEntropyLossEll, self).__init__()
-        assert (use_sigmoid is False) or (use_mask is False)
         self.use_sigmoid = use_sigmoid
         self.use_mask = use_mask
         self.reduction = reduction
         self.loss_weight = loss_weight
-        self.class_weight = class_weight
+        self.ell_weight = ell_weight
 
-        if self.use_sigmoid:
-            self.cls_criterion = binary_cross_entropy
-        elif self.use_mask:
-            self.cls_criterion = mask_cross_entropy
+        if class_weight is not None:
+            self.class_weight = torch.tensor(class_weight)
         else:
-            self.cls_criterion = cross_entropy
+            self.class_weight = None
 
-    def forward(self,
-                cls_score,
-                label,
-                weight=None,
-                avg_factor=None,
-                reduction_override=None,
-                **kwargs):
-        """
-            seg_logit,
-            seg_label,
-            weight=seg_weight,
-            ignore_index=self.ignore_index
-        """
+        # Scharr kernels
+        kx = torch.tensor(
+            [[-3, 0, 3],
+             [-10, 0, 10],
+             [-3, 0, 3]], dtype=torch.float32
+        ).view(1, 1, 3, 3)
 
-        """Forward function."""
-        assert reduction_override in (None, 'none', 'mean', 'sum')
-        reduction = (
-            reduction_override if reduction_override else self.reduction)
-        if self.class_weight is not None:
-            class_weight = cls_score.new_tensor(self.class_weight)
-        else:
-            class_weight = None
-        loss_cls = self.loss_weight * self.cls_criterion(
+        ky = torch.tensor(
+            [[-3, -10, -3],
+             [0, 0, 0],
+             [3, 10, 3]], dtype=torch.float32
+        ).view(1, 1, 3, 3)
+
+        self.register_buffer('kx', kx)
+        self.register_buffer('ky', ky)
+
+
+    def forward(
+        self,
+        cls_score,
+        label,
+        weight=None,
+        avg_factor=None,
+        reduction_override=None,
+        ignore_index=255,
+        **kwargs
+    ):
+        # -------- Cross Entropy Loss --------
+        reduction = reduction_override if reduction_override else self.reduction
+
+        ce_loss = cross_entropy(
             cls_score,
             label,
-            weight,
-            class_weight=class_weight,
+            weight=weight,
+            class_weight=self.class_weight,
             reduction=reduction,
             avg_factor=avg_factor,
-            **kwargs)
-        abl = ELL(label_smoothing=0.0)
-        loss_cls = loss_cls+3.0*abl.forward(logits = cls_score,target = label)
-        return loss_cls
+            ignore_index=ignore_index
+        )
 
+        # -------- Edge Learning Loss --------
+        ell_loss = self.edge_loss(cls_score, label)
+
+        return self.loss_weight * ce_loss + self.ell_weight * ell_loss
+
+    def edge_loss(self, cls_score, label):
+        # Prediction → class mask
+        pred_mask = torch.argmax(cls_score, dim=1)  # [B,H,W]
+
+        # GT mask
+        gt_mask = label.squeeze(1) if label.dim() == 4 else label
+
+        # Compute edges
+        pred_edge = self.compute_edge(pred_mask)
+        gt_edge = self.compute_edge(gt_mask)
+
+        # Binarize GT edge
+        gt_edge = (gt_edge > 0).float()
+
+        # Use logits-safe BCE
+        return F.binary_cross_entropy_with_logits(pred_edge, gt_edge)
+
+
+    def compute_edge(self, x):
+        """
+        x can be:
+        - GT mask: [B, H, W]
+        - Prediction mask: [B, 1, H, W]
+        """
+
+        # Ensure shape is [B, 1, H, W]
+        if x.dim() == 3:
+            x = x.unsqueeze(1)        # [B, 1, H, W]
+        elif x.dim() == 4:
+            pass                      # already correct
+        else:
+            raise ValueError(f"Unexpected tensor shape for edge: {x.shape}")
+
+        x = x.float()
+
+        gx = F.conv2d(x, self.kx, padding=1)
+        gy = F.conv2d(x, self.ky, padding=1)
+
+        edge = torch.sqrt(gx ** 2 + gy ** 2 + 1e-6)
+        return edge

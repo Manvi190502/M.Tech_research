@@ -15,6 +15,7 @@ from .SUIM import SUIMDataset
 from .DUT import DUTDataset
 from .UFO import UFO120Dataset
 from .SUIM_en import SUIMENDataset
+from .SUIM_1 import SUIMEN1Dataset
 
 __all__ = [
     'CustomDataset', 'build_dataloader', 'ConcatDataset', 'RepeatDataset',
@@ -23,5 +24,5 @@ __all__ = [
     'ChaseDB1Dataset', 'DRIVEDataset', 'HRFDataset', 'STAREDataset', 'MapillaryDataset', 'CocoStuff',
     'SUIMDataset',"DUTDataset",
     'UFO120Dataset',
-    'SUIMENDataset'
+    'SUIMENDataset','SUIMEN1Dataset'
 ]

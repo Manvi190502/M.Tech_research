@@ -23,6 +23,7 @@ train_pipeline = [
                                                                      'img_shape', 'pad_shape', 'scale_factor',
                                                                      'img_norm_cfg']),
 ]
+
 test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(

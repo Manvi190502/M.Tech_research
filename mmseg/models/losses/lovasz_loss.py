@@ -275,29 +275,24 @@ class LovaszLoss(nn.Module):
                 cls_score,
                 label,
                 weight=None,
-                avg_factor=None,
-                reduction_override=None,
+                ignore_index=None,
                 **kwargs):
-        """Forward function."""
-        assert reduction_override in (None, 'none', 'mean', 'sum')
-        reduction = (
-            reduction_override if reduction_override else self.reduction)
-        if self.class_weight is not None:
-            class_weight = cls_score.new_tensor(self.class_weight)
-        else:
-            class_weight = None
+        """
+        Args:
+            cls_score (Tensor): shape (N, C, H, W)
+            label (Tensor): shape (N, H, W)
+            weight (Tensor | None): ignored, kept for MMSeg compatibility
+            ignore_index (int | None): ignored, handled internally
+        """
 
-        # if multi-class loss, transform logits to probs
-        if self.cls_criterion == lovasz_softmax:
-            cls_score = F.softmax(cls_score, dim=1)
+        # Remove channel dimension mismatch if needed
+        if cls_score.dim() == 4:
+            cls_score = cls_score.permute(0, 2, 3, 1).contiguous()
 
-        loss_cls = self.loss_weight * self.cls_criterion(
-            cls_score,
+        loss = lovasz_softmax(
+            F.softmax(cls_score, dim=-1),
             label,
-            self.classes,
-            self.per_image,
-            class_weight=class_weight,
-            reduction=reduction,
-            avg_factor=avg_factor,
-            **kwargs)
-        return loss_cls
+            ignore=self.ignore_index
+        )
+
+        return loss * self.loss_weight

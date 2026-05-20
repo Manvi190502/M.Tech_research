@@ -1,15 +1,23 @@
-#!/usr/bin/env bash
+#!/bin/bash
+#SBATCH -p gpu
+#SBATCH --gres=gpu:1
+#SBATCH -J mmseg
+#SBATCH -o %j.out
+#SBATCH -e %j.err
 
 set -x
 
 PARTITION=$1
 JOB_NAME='mmseg'
 CONFIG=$2
-GPUS=${GPUS:-8}
-GPUS_PER_NODE=${GPUS_PER_NODE:-8}
-CPUS_PER_TASK=${CPUS_PER_TASK:-5}
+GPUS=${GPUS:-1}
+GPUS_PER_NODE=${GPUS_PER_NODE:-1}
+CPUS_PER_TASK=${CPUS_PER_TASK:-2}
 SRUN_ARGS=${SRUN_ARGS:-""}
 PY_ARGS=${@:3}
+
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate uwseg
 
 PYTHONPATH="$(dirname $0)/..":$PYTHONPATH \
 srun -p ${PARTITION} \

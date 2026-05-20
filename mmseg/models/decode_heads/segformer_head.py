@@ -252,3 +252,132 @@ class SegFormerHead(BaseDecodeHead):
         x = self.linear_pred(x)
 
         return x
+
+
+
+import torch
+import torch.nn as nn
+from mmseg.models.builder import HEADS
+from mmseg.models.decode_heads.decode_head import BaseDecodeHead
+
+# -----------------------------
+# UAFM Module
+# -----------------------------
+class UAFM(nn.Module):
+    def __init__(self, in_channels):
+        super().__init__()
+        
+        self.mlp = nn.Sequential(
+            nn.Linear(in_channels, in_channels // 4),
+            nn.ReLU(),
+            nn.Linear(in_channels // 4, in_channels)
+        )
+        
+        self.spatial = nn.Conv2d(in_channels, 1, kernel_size=7, padding=3)
+        
+        self.alpha = nn.Parameter(torch.tensor(0.5))
+        self.beta = nn.Parameter(torch.tensor(0.5))
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        
+        # Channel attention
+        z = x.mean(dim=(2, 3))  # GAP
+        wc = torch.sigmoid(self.mlp(z)).view(B, C, 1, 1)
+        
+        # Spatial attention
+        ws = torch.sigmoid(self.spatial(x))
+        
+        # Fusion
+        out = x * (self.alpha * wc + self.beta * ws)
+        
+        return out
+
+
+# -----------------------------
+# MAIN HEAD
+# -----------------------------
+@HEADS.register_module()
+class MAA_segformer2(BaseDecodeHead):
+    def __init__(self,
+                 feature_strides,
+                 use_dw=False,
+                 dropout_ratio=0.05,
+                 act_layer=nn.Sigmoid,
+                 align_corners=False,
+                 use_uafm=True,   # 🔥 NEW FLAG
+                 **kwargs):
+
+        super(MAA_segformer2, self).__init__(
+            input_transform='multiple_select',
+            **kwargs
+        )
+
+        assert len(feature_strides) == len(self.in_channels)
+        assert min(feature_strides) == feature_strides[0]
+
+        self.align_corners = align_corners
+        self.last_channels = self.channels
+        self.use_uafm = use_uafm
+
+        # -----------------------------
+        # MAA Injection Module (your existing)
+        # -----------------------------
+        self.inj_module = InjectionMultiSumallmultiallsum(
+            in_channels=self.in_channels,
+            activations=act_layer,
+            out_channels=self.channels
+        )
+
+        # -----------------------------
+        # Feature Fusion
+        # -----------------------------
+        self.linear_fuse = ConvBNAct(
+            in_channels=self.last_channels,
+            out_channels=self.last_channels,
+            kernel_size=1,
+            stride=1,
+            groups=self.last_channels if use_dw else 1,
+            act=nn.ReLU
+        )
+
+        # -----------------------------
+        # 🔥 UAFM MODULE (NEW)
+        # -----------------------------
+        if self.use_uafm:
+            self.uafm = UAFM(self.last_channels)
+
+        # -----------------------------
+        # Final layers
+        # -----------------------------
+        self.dropout = nn.Dropout2d(dropout_ratio)
+
+        self.conv_seg = nn.Conv2d(
+            self.last_channels,
+            self.num_classes,
+            kernel_size=1
+        )
+
+    def forward(self, inputs):
+        """
+        inputs:
+            list of multi-scale features
+        """
+
+        # Step 1: Multi-scale fusion (MAA)
+        x = self.inj_module(inputs)
+
+        # Step 2: Linear fusion
+        x = self.linear_fuse(x)
+
+        # Step 3: 🔥 UAFM refinement
+        if self.use_uafm:
+            x = self.uafm(x)
+
+        # Step 4: Dropout
+        x = self.dropout(x)
+
+        # Step 5: Final prediction
+        x = self.conv_seg(x)
+
+        return x

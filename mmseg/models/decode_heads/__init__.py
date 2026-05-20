@@ -21,15 +21,13 @@ from .sep_fcn_head import DepthwiseSeparableFCNHead
 from .uper_head import UPerHead
 
 
-from .segformer_head import SegFormerHead
-from .segformer_head import PPMobileSegHead_segformer2,PPMobileSegHead_segformer1
+from .segformer_head import SegFormerHead, MAA_segformer1, MAA_segformer2
+#from .segformer_head import PPMobileSegHead_segformer2,PPMobileSegHead_segformer1
 
 __all__ = [
     'FCNHead', 'PSPHead', 'ASPPHead', 'PSAHead', 'NLHead', 'GCHead', 'CCHead',
     'UPerHead', 'DepthwiseSeparableASPPHead', 'ANNHead', 'DAHead', 'OCRHead',
     'EncHead', 'DepthwiseSeparableFCNHead', 'FPNHead', 'EMAHead', 'DNLHead',
     'PointHead', 'APCHead', 'DMHead', 'LRASPPHead',
-    'SegFormerHead',
-    'PPMobileSegHead_segformer2',
-    'PPMobileSegHead_segformer1'
+    'SegFormerHead','MAA_segformer1','MAA_segformer2'
 ]
